@@ -14,7 +14,7 @@ Use `nil` for the `options` parameter to unregister the function associated with
 
 Use `nil` for the `get_formspec` field to denote that the function does not have its own screen.
 
-Use `nil` for the `privs` field to denote that no special privileges are required to use the function.
+The `privs` field may not be `nil`.
 
 If the identifier is already registered to another function, it will be replaced by the new one.
 
@@ -24,6 +24,9 @@ The `on_select` function must not call `worldedit.show_page`
 worldedit.pages = {} --mapping of identifiers to options
 local identifiers = {} --ordered list of identifiers
 worldedit.register_gui_function = function(identifier, options)
+	if options.privs == nil or next(options.privs) == nil then
+		error("privs unset")
+	end
 	worldedit.pages[identifier] = options
 	table.insert(identifiers, identifier)
 end
@@ -46,7 +49,7 @@ worldedit.register_gui_handler = function(identifier, handler)
 
 		--ensure the player has permission to perform the action
 		local entry = worldedit.pages[identifier]
-		if entry and minetest.check_player_privs(name, entry.privs or {}) then
+		if entry and minetest.check_player_privs(name, entry.privs) then
 			return handler(name, fields)
 		end
 		return false
@@ -118,7 +121,7 @@ elseif rawget(_G, "inventory_plus") then --inventory++ installed
 			return true
 		elseif fields.worldedit_gui_exit then --return to original page
 			if gui_player_formspecs[name] then
-				inventory_plus.set_inventory_formspec(player, gui_player_formspecs[name])
+				inventory_plus.set_inventory_formspec(player, inventory_plus.get_formspec(player, "main"))
 			end
 			return true
 		end
@@ -131,71 +134,35 @@ elseif rawget(_G, "inventory_plus") then --inventory++ installed
 			inventory_plus.set_inventory_formspec(player, get_formspec(name, page))
 		end
 	end
-else --fallback button
-	local player_formspecs = {}
+elseif rawget(_G, "sfinv") then --sfinv installed (part of minetest_game since 0.4.15)
+	assert(sfinv.enabled)
+	local orig_get = sfinv.pages["sfinv:crafting"].get
+	sfinv.override_page("sfinv:crafting", {
+		get = function(self, player, context)
+			local can_worldedit = minetest.check_player_privs(player, {worldedit=true})
+			local fs = orig_get(self, player, context)
+			return fs .. (can_worldedit and "image_button[0,0;1,1;inventory_plus_worldedit_gui.png;worldedit_gui;]" or "")
+		end
+	})
 
-	local update_main_formspec = function(name)
-		local formspec = player_formspecs[name]
-		if not formspec then
-			return
-		end
-		local player = minetest.get_player_by_name(name)
-		if not player then --this is in case the player signs off while the media is loading
-			return
-		end
-		if (minetest.check_player_privs(name, {creative=true}) or
-				minetest.setting_getbool("creative_mode")) and
-				creative_inventory then --creative_inventory is active, add button to modified formspec
-			local creative_formspec = player:get_inventory_formspec()
-			local tab_id = tonumber(creative_formspec:match("tabheader%[.*;(%d)%;.*%]"))
-
-			if tab_id == 1 then
-				formspec = creative_formspec ..
-					"image_button[0,1;1,1;inventory_plus_worldedit_gui.png;worldedit_gui;]"
-			elseif not tab_id then
-				formspec = creative_formspec ..
-					"image_button[6,0;1,1;inventory_plus_worldedit_gui.png;worldedit_gui;]"
-			end
-		else
-			formspec = formspec .. "image_button[0,0;1,1;inventory_plus_worldedit_gui.png;worldedit_gui;]"
-		end
-		player:set_inventory_formspec(formspec)
+	--compatibility with pre-0.4.16 sfinv
+	local set_page = sfinv.set_page or function(player, name)
+		--assumptions: src pg has no leave callback, dst pg has no enter callback
+		local ctx = {page=name}
+		sfinv.contexts[player:get_player_name()] = ctx
+		sfinv.set_player_inventory_formspec(player, ctx)
 	end
 
-	minetest.register_on_joinplayer(function(player)
-		local name = player:get_player_name()
-		minetest.after(1, function()
-			if minetest.get_player_by_name(name) then --ensure the player is still signed in
-				player_formspecs[name] = player:get_inventory_formspec()
-				minetest.after(0.01, function()
-					update_main_formspec(name)
-				end)
-			end
-		end)
-	end)
-
-	minetest.register_on_leaveplayer(function(player)
-		player_formspecs[player:get_player_name()] = nil
-	end)
-
-	local gui_player_formspecs = {}
+	--show the form when the button is pressed and hide it when done
 	minetest.register_on_player_receive_fields(function(player, formname, fields)
-		local name = player:get_player_name()
 		if fields.worldedit_gui then --main page
-			gui_player_formspecs[name] = player:get_inventory_formspec()
-			worldedit.show_page(name, "worldedit_gui")
+			worldedit.show_page(player:get_player_name(), "worldedit_gui")
 			return true
 		elseif fields.worldedit_gui_exit then --return to original page
-			if gui_player_formspecs[name] then
-				player:set_inventory_formspec(gui_player_formspecs[name])
-			end
+			set_page(player, "sfinv:crafting")
 			return true
-		else --deal with creative_inventory setting the formspec on every single message
-			minetest.after(0.01,function()
-				update_main_formspec(name)
-			end)
-			return false --continue processing in creative inventory
 		end
+		return false
 	end)
 
 	worldedit.show_page = function(name, page)
@@ -204,10 +171,19 @@ else --fallback button
 			player:set_inventory_formspec(get_formspec(name, page))
 		end
 	end
+else
+	error(
+		"worldedit_gui requires a supported \"gui management\" mod to be installed\n"..
+		"To use the GUI you need to either\n"..
+		"* Use minetest_game (at least 0.4.15) or a subgame with compatible sfinv\n"..
+		"* Install Unified Inventory or Inventory++\n"..
+		"If you do not want to use worldedit_gui, disable it by editing world.mt or from the Main Menu"
+	)
 end
 
 worldedit.register_gui_function("worldedit_gui", {
 	name = "WorldEdit GUI",
+	privs = {interact=true},
 	get_formspec = function(name)
 		--create a form with all the buttons arranged in a grid
 		local buttons, x, y, index = {}, 0, 1, 0
@@ -240,7 +216,7 @@ worldedit.register_gui_handler("worldedit_gui", function(name, fields)
 	for identifier, entry in pairs(worldedit.pages) do --check for WorldEdit GUI main formspec button selection
 		if fields[identifier] and identifier ~= "worldedit_gui" then
 			--ensure player has permission to perform action
-			local has_privs, missing_privs = minetest.check_player_privs(name, entry.privs or {})
+			local has_privs, missing_privs = minetest.check_player_privs(name, entry.privs)
 			if not has_privs then
 				worldedit.player_notify(name, "you are not allowed to use this function (missing privileges: " .. table.concat(missing_privs, ", ") .. ")")
 				return false
