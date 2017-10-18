@@ -1448,14 +1448,6 @@ minetest.register_on_player_receive_fields(
 			local index = table.getn(worldedit.prob_list[name]) + 1
 			worldedit.prob_list[name][index] = prob_entry
 		end
-=======
-minetest.register_on_player_receive_fields(function(player, formname, fields)
-	if formname == "prob_val_enter" and not (fields.text == "" or fields.text == nil) then
-		local name = player:get_player_name()
-		local prob_entry = {pos=worldedit.prob_pos[name], prob=tonumber(fields.text)}
-		local index = table.getn(worldedit.prob_list[name]) + 1
-		worldedit.prob_list[name][index] = prob_entry
->>>>>>> 7b1deb1b61bc28b3e105833788eb07dfb1326984
 	end
 end)
 
